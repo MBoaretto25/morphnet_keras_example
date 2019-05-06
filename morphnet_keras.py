@@ -75,6 +75,11 @@ class MorphnetMetrics:
         return self._regularizer_loss
 
 
+tensorboard_cb = keras.callbacks.TensorBoard(log_dir="./logs",
+                                             histogram_freq=0,
+                                             write_graph=True,
+                                             write_images=False)
+
 morphnet_metrics = MorphnetMetrics([model.output.op], threshold=1e-3)
 
 model.compile(loss=morphnet_metrics.loss,
@@ -85,7 +90,8 @@ model.fit(x_train, y_train,
           batch_size=batch_size,
           epochs=epochs,
           verbose=1,
-          validation_data=(x_test, y_test))
+          validation_data=(x_test, y_test),
+          callbacks=[tensorboard_cb])
 score = model.evaluate(x_test, y_test, verbose=0)
 print('Test loss:', score[0])
 print('Test accuracy:', score[1])
