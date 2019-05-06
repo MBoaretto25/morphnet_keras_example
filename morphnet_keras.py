@@ -1,0 +1,91 @@
+'''Trains a simple convnet on the MNIST dataset.
+Gets to 99.25% test accuracy after 12 epochs
+(there is still a lot of margin for parameter tuning).
+16 seconds per epoch on a GRID K520 GPU.
+'''
+
+from keras.datasets import mnist
+from keras.models import Sequential
+from keras.layers import Dense, GlobalAveragePooling2D
+from keras.layers import Conv2D, MaxPooling2D, BatchNormalization
+from morph_net.network_regularizers import flop_regularizer
+from morph_net.tools import structure_exporter
+import keras.backend as K
+import keras
+
+batch_size = 128
+num_classes = 10
+epochs = 12
+
+# input image dimensions
+img_rows, img_cols = 28, 28
+
+# the data, split between train and test sets
+(x_train, y_train), (x_test, y_test) = mnist.load_data()
+
+if K.image_data_format() == 'channels_first':
+    x_train = x_train.reshape(x_train.shape[0], 1, img_rows, img_cols)
+    x_test = x_test.reshape(x_test.shape[0], 1, img_rows, img_cols)
+    input_shape = (1, img_rows, img_cols)
+else:
+    x_train = x_train.reshape(x_train.shape[0], img_rows, img_cols, 1)
+    x_test = x_test.reshape(x_test.shape[0], img_rows, img_cols, 1)
+    input_shape = (img_rows, img_cols, 1)
+
+x_train = x_train.astype('float32')
+x_test = x_test.astype('float32')
+x_train /= 255
+x_test /= 255
+print('x_train shape:', x_train.shape)
+print(x_train.shape[0], 'train samples')
+print(x_test.shape[0], 'test samples')
+
+# convert class vectors to binary class matrices
+y_train = keras.utils.to_categorical(y_train, num_classes)
+y_test = keras.utils.to_categorical(y_test, num_classes)
+
+model = Sequential()
+model.add(Conv2D(32, kernel_size=(3, 3),
+                 activation='relu',
+                 input_shape=input_shape))
+model.add(Conv2D(64, (3, 3), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Conv2D(512, (3, 3), activation='relu'))
+model.add(GlobalAveragePooling2D())
+model.add(Dense(128, activation='relu'))
+
+model.add(Dense(num_classes, activation='softmax'))
+
+
+class MorphnetMetrics:
+    def __init__(self, ops, regularizer_strength=1e-8, **kwargs):
+        self._network_regularizer = flop_regularizer.GroupLassoFlopsRegularizer(ops, **kwargs)
+        self._regularization_strength = regularizer_strength
+        self._regularizer_loss = (self._network_regularizer.get_regularization_term() * self._regularization_strength)
+        self._sess = K.get_session()
+
+    def loss(self, *args):
+        with self._sess.as_default():
+            return keras.losses.categorical_crossentropy(*args) + self._regularizer_loss.eval()
+
+    def flops(self, *args):
+        return self._network_regularizer.get_cost()
+
+    def regularizer_loss(self, *args):
+        return self._regularizer_loss
+
+
+morphnet_metrics = MorphnetMetrics([model.output.op], threshold=1e-3)
+
+model.compile(loss=morphnet_metrics.loss,
+              optimizer=keras.optimizers.Adadelta(),
+              metrics=['accuracy', morphnet_metrics.flops, morphnet_metrics.regularizer_loss])
+
+model.fit(x_train, y_train,
+          batch_size=batch_size,
+          epochs=epochs,
+          verbose=1,
+          validation_data=(x_test, y_test))
+score = model.evaluate(x_test, y_test, verbose=0)
+print('Test loss:', score[0])
+print('Test accuracy:', score[1])
